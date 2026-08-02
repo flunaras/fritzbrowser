@@ -1,0 +1,47 @@
+# Build image for openSUSE Leap 15.6 — pure Qt5, NO KDE Frameworks, NO OBS repos
+#
+# All packages come exclusively from the standard openSUSE Leap 15.6 OSS repo.
+# KDE Frameworks 5 (and extra-cmake-modules) are NOT available there, so this
+# build uses -DUSE_KF=0 and the HAVE_KF=0 code paths throughout the source.
+# libsecret is used instead of KWallet for credential storage.
+
+FROM opensuse/leap:15.6
+
+LABEL org.opencontainers.image.title="fritzbrowser-builder-leap15.6"
+LABEL org.opencontainers.image.description="Build environment for fritzbrowser on openSUSE Leap 15.6 (Qt5 only, no KDE Frameworks)"
+
+# ── Base build tools (standard OSS repo only) ─────────────────────────────────
+RUN zypper --non-interactive ref && \
+    zypper --non-interactive install --no-recommends \
+        cmake \
+        ninja \
+        gcc-c++ \
+        make \
+        git \
+        pkg-config \
+        gzip \
+        tar \
+        which
+
+# ── Qt5 development libraries (all from standard OSS repo) ────────────────────
+# --allow-downgrade works around a libncurses6/libxslt-devel version conflict
+# pulled in transitively by the Qt WebEngine devel package.
+RUN zypper --non-interactive install --no-recommends --allow-downgrade \
+        libQt5Core-devel \
+        libQt5Gui-devel \
+        libQt5Widgets-devel \
+        libQt5Network-devel \
+        libqt5-qtwebengine-devel
+
+# ── libsecret — secure credential storage without KDE ─────────────────────────
+RUN zypper --non-interactive install --no-recommends \
+        libsecret-devel
+
+# ── RPM packaging tools ───────────────────────────────────────────────────────
+RUN zypper --non-interactive install --no-recommends \
+        rpm-build
+
+# ── Ensure the build directory exists and is writable ─────────────────────────
+RUN mkdir -p /build && chmod 777 /build
+
+WORKDIR /src

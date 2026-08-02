@@ -1,0 +1,50 @@
+# Build image for openSUSE Leap 16.0 — Qt6 + KDE Frameworks 6
+#
+# Qt6 devel packages (including WebEngine) come from the standard OSS repo.
+# KDE Frameworks 6 and extra-cmake-modules (ECM) are NOT in the standard
+# Leap 16.0 repo; they require the KDE:Extra OBS repository.
+
+FROM opensuse/leap:16.0
+
+LABEL org.opencontainers.image.title="fritzbrowser-builder-leap16.0"
+LABEL org.opencontainers.image.description="Build environment for fritzbrowser on openSUSE Leap 16.0 (Qt6/KF6)"
+
+# ── Add KDE:Extra OBS repository ──────────────────────────────────────────────
+RUN zypper --non-interactive addrepo --refresh --priority 90 \
+        https://download.opensuse.org/repositories/KDE:/Extra/openSUSE_Leap_16.0/KDE:Extra.repo \
+    && zypper --non-interactive --gpg-auto-import-keys refresh
+
+# ── Base build tools ──────────────────────────────────────────────────────────
+RUN zypper --non-interactive ref && \
+    zypper --non-interactive install --no-recommends \
+        cmake \
+        ninja \
+        gcc-c++ \
+        make \
+        git \
+        pkg-config \
+        gzip \
+        tar \
+        which
+
+# ── Qt6 development libraries (standard OSS repo) ─────────────────────────────
+RUN zypper --non-interactive install --no-recommends \
+        qt6-base-devel \
+        qt6-base-private-devel \
+        qt6-network-devel \
+        qt6-webenginewidgets-devel
+
+# ── extra-cmake-modules + KDE Frameworks 6 devel (KDE:Extra repo) ─────────────
+RUN zypper --non-interactive install --no-recommends \
+        extra-cmake-modules \
+        kf6-kcoreaddons-devel \
+        kf6-kwallet-devel
+
+# ── RPM packaging tools ───────────────────────────────────────────────────────
+RUN zypper --non-interactive install --no-recommends \
+        rpm-build
+
+# ── Ensure the build directory exists and is writable ─────────────────────────
+RUN mkdir -p /build && chmod 777 /build
+
+WORKDIR /src

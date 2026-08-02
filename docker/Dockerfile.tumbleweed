@@ -1,0 +1,48 @@
+# Build image for openSUSE Tumbleweed — Qt6 + KDE Frameworks 6
+#
+# All packages come from the standard Tumbleweed OSS repo; no extra OBS
+# repositories are needed.
+
+FROM opensuse/tumbleweed:latest
+
+LABEL org.opencontainers.image.title="fritzbrowser-builder-tumbleweed"
+LABEL org.opencontainers.image.description="Build environment for fritzbrowser on openSUSE Tumbleweed (Qt6/KF6)"
+
+# ── Base build tools ──────────────────────────────────────────────────────────
+RUN zypper --non-interactive ref && \
+    zypper --non-interactive install --no-recommends  --force-resolution --allow-downgrade\
+        cmake \
+        ninja \
+        gcc-c++ \
+        make \
+        git \
+        pkg-config \
+        gzip \
+        tar \
+        which
+
+# ── Remove busybox-gawk — conflicts with qt6-printsupport-devel (Qt 6.11+) ────
+RUN zypper --non-interactive remove busybox-gawk && \
+    zypper --non-interactive install --no-recommends --force-resolution --allow-downgrade gawk
+
+# ── Qt6 development libraries ─────────────────────────────────────────────────
+RUN zypper --non-interactive install --no-recommends --force-resolution --allow-downgrade \
+        qt6-base-devel \
+        qt6-base-private-devel \
+        qt6-network-devel \
+        qt6-webenginewidgets-devel
+
+# ── extra-cmake-modules + KDE Frameworks 6 devel ──────────────────────────────
+RUN zypper --non-interactive install --no-recommends --force-resolution --allow-downgrade \
+        kf6-extra-cmake-modules \
+        kf6-kcoreaddons-devel \
+        kf6-kwallet-devel
+
+# ── RPM packaging tools ───────────────────────────────────────────────────────
+RUN zypper --non-interactive install --no-recommends --force-resolution --allow-downgrade \
+        rpm-build
+
+# ── Ensure the build directory exists and is writable ─────────────────────────
+RUN mkdir -p /build && chmod 777 /build
+
+WORKDIR /src

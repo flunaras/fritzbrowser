@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fritz!Box Browser
+GenericName=Fritz!Box Web Browser
+Comment=Browse your Fritz!Box web UI with automatic re-login
+Exec=fritzbrowser
+Icon=fritzbrowser
+Categories=Qt;KDE;Network;WebBrowser;
+Keywords=fritz;fritzbox;browser;login;session;AVM;KDE;Plasma;
+StartupNotify=true
+StartupWMClass=fritzbrowser

@@ -1,0 +1,197 @@
+# Build image for openSUSE Tumbleweed — cross-compilation for aarch64
+#
+# Strategy: x86_64 container with the aarch64-suse-linux GCC14 cross-compiler
+# from the standard Tumbleweed OSS repo, plus an aarch64 sysroot built by
+# downloading and extracting aarch64 RPMs from the openSUSE ports mirror.
+#
+# Unlike a "cross-compile Chromium from source" approach (genuinely
+# unsupported by QtWebEngine's build system), this only needs to link our
+# own small application against *already-compiled* aarch64 Qt6/KF6 shared
+# libraries — openSUSE already publishes prebuilt aarch64 packages for
+# qt6-webenginewidgets/qt6-webenginecore (and everything they depend on),
+# so the same "fetch prebuilt aarch64 RPMs into a sysroot" trick used for
+# KF6 below works for QtWebEngine too.
+#
+# No QEMU / binfmt_misc required on the host.
+#
+# Cross-compiler binary prefix: aarch64-suse-linux-
+# Sysroot location inside container: /usr/aarch64-suse-linux/sys-root
+#   (the gcc-provided glibc sysroot; Qt6+KF6+WebEngine content is merged
+#   into it)
+# CMake toolchain file: /src/cmake/toolchain-aarch64.cmake
+
+FROM opensuse/tumbleweed:latest
+
+LABEL org.opencontainers.image.title="fritzbrowser-builder-tumbleweed-aarch64"
+LABEL org.opencontainers.image.description="Cross-build environment for fritzbrowser on openSUSE Tumbleweed (Qt6/KF6 + WebEngine, target aarch64)"
+
+# ── Base build tools (x86_64 host tools) ─────────────────────────────────────
+RUN zypper --non-interactive ref && \
+    zypper --non-interactive install --no-recommends --force-resolution --allow-downgrade \
+        cmake \
+        ninja \
+        make \
+        git \
+        pkg-config \
+        gzip \
+        tar \
+        which \
+        curl \
+        cpio \
+        rpm-build
+
+# ── aarch64 cross-compiler (runs on x86_64, targets aarch64-suse-linux) ──────
+RUN zypper --non-interactive install --force-resolution --allow-downgrade --no-recommends \
+        cross-aarch64-gcc14 \
+        cross-aarch64-binutils
+
+# ── Host Qt6 tools (moc/rcc/uic) + host WebEngine dev headers ────────────────
+# Qt6's cross-compilation machinery needs a host-side Qt6 install to run
+# code generators (moc/rcc/uic) and some host-tool CMake packages during
+# configure; qt6-webenginecore-devel/qt6-webenginewidgets-devel provide the
+# host-side Qt6WebEngineCoreTools/Qt6WebEngineWidgetsTools CMake configs.
+RUN zypper --non-interactive install --force-resolution --allow-downgrade --no-recommends \
+        qt6-base-devel \
+        qt6-webenginewidgets-devel \
+        kf6-kconfig \
+        kf6-kconfig-devel
+
+ENV SYSROOT=/usr/aarch64-suse-linux/sys-root
+ENV PORTS_BASE=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss
+
+# Fetches the latest aarch64 (or noarch) RPM matching a package name from
+# the ports mirror and extracts it directly into the sysroot.
+# Usage: fetch_pkg <pkg-name> <arch: aarch64|noarch>
+RUN cat > /usr/local/bin/fetch-pkg.sh << 'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+pkg="$1"
+arch="${2:-aarch64}"
+base="${PORTS_BASE}/${arch}"
+url=$(curl -sL "${base}/" | grep -oP "href=\"\K\./${pkg}-[^\"]+\.${arch}\.rpm" | head -1 | sed 's|^\./||')
+if [[ -z "${url}" ]]; then
+    echo "ERROR: package '${pkg}' (${arch}) not found on ${base}" >&2
+    exit 1
+fi
+echo "Fetching: ${base}/${url}"
+curl -fsSL "${base}/${url}" -o /tmp/pkg.rpm
+rpm2cpio /tmp/pkg.rpm | cpio -idmv --quiet 2>/dev/null
+rm -f /tmp/pkg.rpm
+SCRIPT
+RUN chmod +x /usr/local/bin/fetch-pkg.sh
+
+# ── Group 1: Qt6 base runtime libs + devel ───────────────────────────────────
+# (Core, Gui, Widgets, DBus, Network, Xml, Concurrent, OpenGL, Qml,
+# PrintSupport — the same set fritzhome's aarch64 build needs, since
+# QtWebEngineWidgets transitively depends on all of these too)
+RUN set -euo pipefail; cd /tmp; \
+    for pkg in \
+        libQt6Core6 \
+        libQt6Gui6 \
+        libQt6Widgets6 \
+        libQt6DBus6 \
+        libQt6Network6 \
+        libQt6Xml6 \
+        libQt6Concurrent6 \
+        libQt6OpenGL6 \
+        libQt6OpenGLWidgets6 \
+        libQt6Qml6 \
+        libQt6PrintSupport6 \
+        qt6-base-common-devel \
+        qt6-core-devel \
+        qt6-gui-devel \
+        qt6-widgets-devel \
+        qt6-opengl-devel \
+        qt6-openglwidgets-devel \
+        qt6-concurrent-devel \
+        qt6-dbus-devel \
+        qt6-network-devel \
+        qt6-xml-devel \
+        qt6-printsupport-devel \
+        qt6-qml-devel \
+    ; do fetch-pkg.sh "$pkg" aarch64; done; \
+    cp -a --no-preserve=ownership /tmp/usr/. "${SYSROOT}/usr/"; \
+    rm -rf /tmp/usr
+
+# ── Group 2: QtWebEngine's own extra transitive dependencies ─────────────────
+# (Quick/QuickWidgets/WebChannel/Positioning, on top of Group 1, are what
+# QtWebEngineWidgets additionally needs beyond plain Qt6 Widgets)
+RUN set -euo pipefail; cd /tmp; \
+    for pkg in \
+        libQt6Quick6 \
+        libQt6QuickWidgets6 \
+        libQt6WebChannel6 \
+        libQt6Positioning6 \
+        libQt6QmlModels6 \
+        libQt6QmlMeta6 \
+        libQt6QmlWorkerScript6 \
+        libQt6QmlCore6 \
+        qt6-quick-devel \
+        qt6-quickwidgets-devel \
+        qt6-webchannel-devel \
+        qt6-positioning-devel \
+        qt6-shadertools-devel \
+        qt6-qmlmodels-private-devel \
+        qt6-qmlmeta-private-devel \
+        qt6-qmlworkerscript-private-devel \
+        qt6-qmlcore-private-devel \
+    ; do fetch-pkg.sh "$pkg" aarch64; done; \
+    cp -a --no-preserve=ownership /tmp/usr/. "${SYSROOT}/usr/"; \
+    rm -rf /tmp/usr
+
+# ── Group 3: QtWebEngine itself ───────────────────────────────────────────────
+RUN set -euo pipefail; cd /tmp; \
+    for pkg in \
+        libQt6WebEngineCore6 \
+        libQt6WebEngineWidgets6 \
+        qt6-webenginecore-devel \
+        qt6-webenginewidgets-devel \
+    ; do fetch-pkg.sh "$pkg" aarch64; done; \
+    cp -a --no-preserve=ownership /tmp/usr/. "${SYSROOT}/usr/"; \
+    rm -rf /tmp/usr
+
+# ── Group 4: KDE Frameworks 6 ECM + runtime libs + devel packages ────────────
+RUN set -euo pipefail; cd /tmp; \
+    fetch-pkg.sh kf6-extra-cmake-modules noarch; \
+    for pkg in \
+        libKF6CoreAddons6 \
+        libKF6Wallet6 \
+        libKF6ConfigCore6 \
+        libKF6ConfigGui6 \
+        libKF6ConfigQml6 \
+        libKF6Codecs6 \
+        libKF6GuiAddons6 \
+        libKF6WindowSystem6 \
+        kf6-kcoreaddons-devel \
+        kf6-kwallet-devel \
+        kf6-kconfig-devel \
+        kf6-kwindowsystem-devel \
+        kf6-kcodecs-devel \
+        kf6-kguiaddons-devel \
+    ; do fetch-pkg.sh "$pkg" aarch64; done; \
+    cp -a --no-preserve=ownership /tmp/usr/. "${SYSROOT}/usr/"; \
+    rm -rf /tmp/usr
+
+# ── Group 5: EGL / GLES / GL headers (needed by Qt6Gui) ──────────────────────
+RUN set -euo pipefail; cd /tmp; \
+    for pkg in \
+        Mesa-libEGL1 \
+        Mesa-libEGL-devel \
+        Mesa-libGL1 \
+        Mesa-libGL-devel \
+        Mesa-libGLESv2-devel \
+        Mesa-KHR-devel \
+        libglvnd \
+        libglvnd-devel \
+    ; do fetch-pkg.sh "$pkg" aarch64; done; \
+    cp -a --no-preserve=ownership /tmp/usr/. "${SYSROOT}/usr/"; \
+    rm -rf /tmp/usr
+
+# ── RPM packaging tools ───────────────────────────────────────────────────────
+RUN zypper --non-interactive install --no-recommends \
+        rpm-build
+
+# ── Ensure the build directory exists and is writable ─────────────────────────
+RUN mkdir -p /build && chmod 777 /build
+
+WORKDIR /src
